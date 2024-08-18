@@ -30,11 +30,14 @@ type GuitarProFileInfo struct {
 	*/
 }
 
-// notGPFile represents an error indicating the file is not a Guitar Pro file
+// notGPFile represents an error indicating the file is not a Guitar Pro file.
+// It implements the error interface, allowing it to be used with functions that expect an error return value.
 type notGPFile struct {
-	msg string
+	msg string // The error message.
 }
 
+// Error returns the error message associated with the notGPFile instance.
+// This method is required to satisfy the error interface.
 func (e *notGPFile) Error() string {
 	return e.msg
 }
