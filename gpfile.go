@@ -23,7 +23,7 @@ func SupportedFormats() []string {
 	return []string{".gp3", ".gp4", ".gp5"} //, ".gpx"}
 }
 
-// NewGPFile creates a new GuitarProFileInfo instance for the specified file path.
+// NewGPFile creates a new GPFile instance for the specified file path.
 // It checks if the file exists, is not empty, and has a supported Guitar Pro format (.gp3, .gp4, .gp5, .gpx).
 // If the file is valid, it opens the file, sets the FullPath property, and returns the GuitarProFileInfo instance.
 // If the file is not a supported format, it returns a notGPFile error.
@@ -32,10 +32,10 @@ func SupportedFormats() []string {
 // p (string): The file path of the Guitar Pro file.
 //
 // Returns:
-// gp (*GuitarProFileInfo): A pointer to the GuitarProFileInfo instance for the specified file path.
+// gp (*GPFile): A pointer to the GPFile instance for the specified file path.
 // err (error): An error if any issues occur during the file validation or opening process.
-func NewGPFile(p string) (gp *GuitarProFileInfo, err error) {
-	gp = &GuitarProFileInfo{}
+func NewGPFile(p string) (gp *GPFile, err error) {
+	gp = &GPFile{}
 	file, err := os.Open(p)
 	if err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func NewGPFile(p string) (gp *GuitarProFileInfo, err error) {
 //
 // The function returns an error if any issues occur during the file reading,
 // header detection, or information extraction process.
-func (gp *GuitarProFileInfo) LoadHeader() error {
+func (gp *GPFile) LoadHeader() error {
 	// return gp.loadFileHeader()
 	if fi, err := os.Stat(gp.FullPath); err != nil || fi.Size() == 0 {
 		if err == nil {
@@ -126,7 +126,7 @@ func (gp *GuitarProFileInfo) LoadHeader() error {
 // Returns:
 // string: The string representation of the long string read from the reader.
 // error: An error if any issues occur during the reading process.
-func (gp *GuitarProFileInfo) readLongString(fo io.Reader) (string, error) {
+func (gp *GPFile) readLongString(fo io.Reader) (string, error) {
 	var size int32
 	if err := binary.Read(fo, binary.LittleEndian, &size); err != nil {
 		return "", err
@@ -158,7 +158,7 @@ func (gp *GuitarProFileInfo) readLongString(fo io.Reader) (string, error) {
 //
 // Returns:
 // error: An error if any issues occur during the reading or seeking process.
-func (gp *GuitarProFileInfo) uncompressedGpInfo(fo io.ReadSeeker, head []byte) error {
+func (gp *GPFile) uncompressedGpInfo(fo io.ReadSeeker, head []byte) error {
 	version := make([]byte, 4)
 	if _, err := io.ReadFull(fo, version); err != nil {
 		return err
@@ -210,12 +210,12 @@ func (gp *GuitarProFileInfo) uncompressedGpInfo(fo io.ReadSeeker, head []byte) e
 		return err
 	}
 
-	gp.LyricBy, err = gp.readLongString(fo)
+	gp.LyricsAuthor, err = gp.readLongString(fo)
 	if err != nil {
 		return err
 	}
 
-	gp.MusicBy, err = gp.readLongString(fo)
+	gp.MusicAuthor, err = gp.readLongString(fo)
 	if err != nil {
 		return err
 	}
@@ -225,15 +225,15 @@ func (gp *GuitarProFileInfo) uncompressedGpInfo(fo io.ReadSeeker, head []byte) e
 		return err
 	}
 
-	gp.Transcriber, err = gp.readLongString(fo)
+	gp.Tab, err = gp.readLongString(fo)
 	if err != nil {
 		return err
 	}
 
-	// Notice (Version 5 gp5, tested) gp4 break for this
+	// Instructions (Version 5 gp5, tested) gp4 break for this
 	switch gp.Version {
 	case "v5.0", "v5.1":
-		gp.Notice, err = gp.readLongString(fo)
+		gp.Instructions, err = gp.readLongString(fo)
 		if err != nil {
 			return err
 		}

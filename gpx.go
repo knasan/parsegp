@@ -120,7 +120,7 @@ func decompressBCFZ(file *os.File) ([]byte, error) {
 }
 
 // loadGPXFile loads a GPX file.
-func (gp *GuitarProFileInfo) loadGPXFile() error {
+func (gp *GPFile) loadGPXFile() error {
 	fi, err := os.Stat(gp.FullPath)
 	if err != nil || fi.Size() == 0 {
 		return fmt.Errorf("file is empty or does not exist")

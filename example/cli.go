@@ -56,19 +56,19 @@ func processFile(path string) error {
 			"Lyric: %s\n"+
 			"Music: %s\n"+
 			"Copyright: %s\n"+
-			"Transcriber: %s\n"+
-			"Notice: %s\n",
+			"Transcriber/Tab: %s\n"+
+			"Notice/Instruction: %s\n",
 		gp.FullPath,
 		gp.Version,
 		gp.Artist,
 		gp.Title,
 		gp.Subtitle,
 		gp.Album,
-		gp.LyricBy,
-		gp.MusicBy,
+		gp.LyricsAuthor,
+		gp.MusicAuthor,
 		gp.Copyright,
-		gp.Transcriber,
-		gp.Notice)
+		gp.Tab,
+		gp.Instructions)
 	fmt.Println("--")
 	return nil
 }
