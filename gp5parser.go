@@ -1,10 +1,22 @@
+// Pacakge parsegp provides functionality for parsing Guitar Pro files (.gp3, .gp4, gp5, gpx).
+// Description: This file contains the implementation of the GP5Parser struct and its methods.
+
+// Replica of C++ version by PhilPotter
+// https://github.com/PhilPotter/gp_parser/blob/master/gp_parser.cpp
+
 package parsegp
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -18,44 +30,165 @@ const (
 	GP_BEND_POSITION                 = 60
 )
 
-type Parser struct {
-	fileBuffer     []byte
-	bufferPosition int
-	versionIndex   int
-	channels       []Channel
-	measureHeaders []MeasureHeader
-	measures       []Measure
-	tracks         []Track
-	bitStream      *BitStream
-	TabFile        *TabFile
+var VERSIONS = []string{
+	"FICHIER GUITAR PRO v5.00",
+	"FICHIER GUITAR PRO v5.10",
 }
 
-/*
-/ Beispielverwendung
-	parser := Parser{
-		fileBuffer:    []byte{0x01, 0x02, 0x03, 0x04}, // Beispiel-Byte-Array
-		bufferPosition: 0,                             // Startposition
+type Parser struct {
+	FileBuffer         []byte
+	BufferPosition     int
+	VersionIndex       int
+	Channels           []Channel
+	MeasureHeaders     []MeasureHeader
+	Measures           []Measure
+	Tracks             []Track
+	BitStream          *BitStream
+	Lyric              Lyric
+	TempoValue         int
+	GlobalKeySignature int
+	Major              int
+	Minor              int
+	Title              string
+	Subtitle           string
+	Artist             string
+	Album              string
+	LyricsAuthor       string
+	MusicAuthor        string
+	Copyright          string
+	Tab                string
+	Instructions       string
+	Comments           []string
+	TabFile            *TabFile
+	Version            string
+}
+
+// NewParser creates a new Parser instance from the given file path.
+// It reads and parses the file's header information, including version, title, subtitle, artist, album,
+// lyrics author, music author, copyright, tab, and instructions.
+//
+// Parameters:
+// filePath (string): The path to the Guitar Pro tab file.
+//
+// Returns:
+// *Parser: A pointer to a new Parser instance, or nil if an error occurs.
+// error: An error if the file path is empty, if the file cannot be opened, or if an error occurs during parsing.
+func NewParser(filePath string) (*Parser, error) {
+	if filePath == "" {
+		return nil, errors.New("null file path passed to constructor")
 	}
-*/
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	fileBuffer, err := io.ReadAll(bufio.NewReader(file))
+	if err != nil {
+		return nil, err
+	}
+
+	parser := &Parser{
+		FileBuffer:     fileBuffer,
+		BufferPosition: 0,
+	}
+
+	// Read and check version
+	version, err := parser.ReadVersion()
+	if err != nil {
+		return nil, err
+	}
+	parser.Version = version
+
+	if !parser.IsSupportedVersion(parser.Version) {
+		return nil, errors.New("unsupported version")
+	}
+
+	// Parse out major and minor version numbers
+	majorAndMinorExp := regexp.MustCompile(`(\d+)\.(\d+)`)
+	matches := majorAndMinorExp.FindStringSubmatch(version)
+	if len(matches) < 3 {
+		return nil, errors.New("failed to parse version numbers")
+	}
+
+	parser.Major, err = strconv.Atoi(matches[1])
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Minor, err = strconv.Atoi(matches[2])
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Title, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Subtitle, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Artist, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Album, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.LyricsAuthor, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.MusicAuthor, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Copyright, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Tab, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+
+	parser.Instructions, err = parser.readStringByteSizeOfInteger()
+	if err != nil {
+		return nil, err
+	}
+	// Assume additional initialization occurs here
+
+	return parser, nil
+}
 
 // ReadInt reads the next 4 bytes from the file buffer as a 32-bit integer (int32).
 // It returns the integer value and an error if there are not enough bytes to read.
 // The function also updates the buffer position by 4 after reading.
 func (p *Parser) readInt() (int32, error) {
 	// Check if there are enough bytes to read
-	if p.bufferPosition+4 > len(p.fileBuffer) {
+	if p.BufferPosition+4 > len(p.FileBuffer) {
 		return 0, errors.New("not enough bytes to read int")
 	}
 
 	// Reading the 4 bytes and converting them to a 32-bit integer
 	returnVal := int32(
-		((uint32(p.fileBuffer[p.bufferPosition+3]) & 0xFF) << 24) |
-			((uint32(p.fileBuffer[p.bufferPosition+2]) & 0xFF) << 16) |
-			((uint32(p.fileBuffer[p.bufferPosition+1]) & 0xFF) << 8) |
-			(uint32(p.fileBuffer[p.bufferPosition]) & 0xFF))
+		((uint32(p.FileBuffer[p.BufferPosition+3]) & 0xFF) << 24) |
+			((uint32(p.FileBuffer[p.BufferPosition+2]) & 0xFF) << 16) |
+			((uint32(p.FileBuffer[p.BufferPosition+1]) & 0xFF) << 8) |
+			(uint32(p.FileBuffer[p.BufferPosition]) & 0xFF))
 
 	// Increase buffer position by 4 after reading
-	p.bufferPosition += 4
+	p.BufferPosition += 4
 
 	return returnVal, nil
 }
@@ -67,13 +200,13 @@ func (p *Parser) readInt() (int32, error) {
 // and returns the byte value as an byte along with a nil error.
 func (p *Parser) readByte() (byte, error) {
 	// Check if there are still bytes in the buffer
-	if p.bufferPosition >= len(p.fileBuffer) {
+	if p.BufferPosition >= len(p.FileBuffer) {
 		return 0, errors.New("not enough bytes to read")
 	}
 
 	// Read the byte and increment the buffer position
-	byteValue := p.fileBuffer[p.bufferPosition]
-	p.bufferPosition++
+	byteValue := p.FileBuffer[p.BufferPosition]
+	p.BufferPosition++
 
 	return byteValue, nil
 }
@@ -92,15 +225,15 @@ func (p *Parser) readByte() (byte, error) {
 //
 //	uint8 - The byte value read from the buffer.
 //	error - An error if there are not enough bytes to read.
-func (p *Parser) readUnsignedByte() (uint8, error) {
+func (p *Parser) readUnsignedByte() (byte, error) {
 	// Check if there are still bytes in the buffer
-	if p.bufferPosition >= len(p.fileBuffer) {
+	if p.BufferPosition >= len(p.FileBuffer) {
 		return 0, errors.New("not enough bytes to read")
 	}
 
 	// Read the byte and increment the buffer position
-	byteValue := p.fileBuffer[p.bufferPosition]
-	p.bufferPosition++
+	byteValue := p.FileBuffer[p.BufferPosition]
+	p.BufferPosition++
 
 	return byteValue, nil
 }
@@ -121,13 +254,13 @@ func (p *Parser) readUnsignedByte() (uint8, error) {
 func (p *Parser) readString(size int) (string, error) {
 	// Check if there are enough bytes in the buffer
 
-	if p.bufferPosition+size > len(p.fileBuffer) {
+	if p.BufferPosition+size > len(p.FileBuffer) {
 		return "", errors.New("not enough bytes to read string")
 	}
 
 	// Read the bytes and create the string
-	byteSlice := p.fileBuffer[p.bufferPosition : p.bufferPosition+size]
-	p.bufferPosition += size
+	byteSlice := p.FileBuffer[p.BufferPosition : p.BufferPosition+size]
+	p.BufferPosition += size
 
 	return string(byteSlice), nil
 }
@@ -155,13 +288,13 @@ func (p *Parser) readByteString(size, len int) (string, error) {
 	}
 
 	// Check if there are enough bytes in the buffer
-	if p.bufferPosition+bytesToRead > binary.Size(p.fileBuffer) { // len(p.fileBuffer) {
+	if p.BufferPosition+bytesToRead > binary.Size(p.FileBuffer) { // len(p.fileBuffer) {
 		return "", errors.New("not enough bytes to read string")
 	}
 
 	// Read the bytes from the buffer
-	bytes := p.fileBuffer[p.bufferPosition : p.bufferPosition+bytesToRead]
-	p.bufferPosition += bytesToRead
+	bytes := p.FileBuffer[p.BufferPosition : p.BufferPosition+bytesToRead]
+	p.BufferPosition += bytesToRead
 
 	// Determine the actual length of the string to return
 	actualLength := bytesToRead
@@ -190,8 +323,7 @@ func (p *Parser) readStringByte(size int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	inum := int(num)
-	return p.readByteString(size, inum)
+	return p.readByteString(size, int(num))
 }
 
 // readStringByteSizeOfInteger reads a string from the file buffer using the size of the next byte as the string length.
@@ -244,7 +376,7 @@ func (p *Parser) readStringInteger() (string, error) {
 //
 //	None
 func (p *Parser) skip(n int) {
-	p.bufferPosition += n
+	p.BufferPosition += n
 }
 
 // ReadVersion reads a version string from the file buffer using the specified size.
@@ -258,7 +390,7 @@ func (p *Parser) skip(n int) {
 //
 //	string - The version string read from the buffer.
 //	error - An error if there are not enough bytes to read or if the readStringByte method returns an error.
-func ReadVersion(p *Parser) (string, error) {
+func (p *Parser) ReadVersion() (string, error) {
 	return p.readStringByte(30)
 }
 
@@ -296,8 +428,13 @@ func (p *Parser) readLyrics() Lyric {
 	return lyric
 }
 
+// readPageSetup reads and processes page setup data from the file buffer.
+// It skips over the page setup data based on the version index.
+// If the version index is greater than 0, it skips over 49 bytes.
+// Otherwise, it skips over 30 bytes.
+// After skipping the initial bytes, it iterates over 11 times, skipping over 4 bytes and reading a string of length 0.
 func (p *Parser) readPageSetup() {
-	if p.versionIndex > 0 {
+	if p.VersionIndex > 0 {
 		p.skip(49)
 	} else {
 		p.skip(30)
@@ -308,6 +445,16 @@ func (p *Parser) readPageSetup() {
 	}
 }
 
+// readKeySignature reads the key signature from the file buffer and returns it.
+// It reads a single byte from the buffer and adjusts the value based on the version index.
+// If an error occurs during reading, it returns the original keySignature value minus 1.
+//
+// Parameters:
+// p - A pointer to the Parser struct from which to read the key signature.
+//
+// Return:
+// byte - The key signature value read from the file buffer.
+// If an error occurs during reading, it returns the original keySignature value minus 1.
 func (p *Parser) readKeySignature() byte {
 	keySignature, err := p.readByte()
 	if err != nil {
@@ -448,7 +595,7 @@ func (p *Parser) readChannel(track *Track) {
 	}
 	gmChannel2 = gmChannel2 - 1
 
-	if gmChannel1 >= 0 && gmChannel1 < int32(len(p.channels)) {
+	if gmChannel1 >= 0 && gmChannel1 < int32(len(p.Channels)) {
 		// Temporäre ChannelParam Objekte
 		gmChannel1Param := ChannelParam{
 			Key:   "gm channel 1",
@@ -466,7 +613,7 @@ func (p *Parser) readChannel(track *Track) {
 		}
 
 		// Kopiere Channel in eine temporäre Variable
-		channel := p.channels[gmChannel1]
+		channel := p.Channels[gmChannel1]
 
 		// TODO: channel auxiliary, JS code below:
 		/*for i := 0; i < len(p.channels); i++ {
@@ -477,15 +624,18 @@ func (p *Parser) readChannel(track *Track) {
 		}*/
 
 		if channel.ID == 0 {
-			channel.ID = int32(len(p.channels) + 1)
+			channel.ID = int32(len(p.Channels) + 1)
 			channel.Name = "TODO"
 			channel.Parameters = append(channel.Parameters, gmChannel1Param, gmChannel2Param)
-			p.channels = append(p.channels, channel)
+			p.Channels = append(p.Channels, channel)
 		}
 		track.ChannelID = channel.ID
 	}
 }
 
+// readMeasure reads and processes a measure from the MIDI file.
+// It iterates through the beats in the measure, calculates the start time for each beat,
+// and updates the measure's beats, clef, and key signature.
 func (p *Parser) readMeasure(measure *Measure, track *Track, tempo *Tempo, keySignature int8) {
 	for voice := 0; voice < 2; voice++ {
 		start := float64(measure.Start)
@@ -528,11 +678,25 @@ func (p *Parser) readMeasure(measure *Measure, track *Track, tempo *Tempo, keySi
 	measure.KeySignature = keySignature
 }
 
+// getLength calculates the length of a measure based on its time signature and tempo.
+// It uses the time signature's numerator and the denominator to convert it into a Duration,
+// then multiplies it by the tempo to get the total length in seconds.
+// The result is rounded to the nearest integer and returned as an int32.
 func (p *Parser) getLength(header *MeasureHeader) int32 {
 	return int32(math.Round(float64(header.TimeSignature.Numerator) *
 		p.getTime(p.denominatorToDuration(header.TimeSignature.Denominator))))
 }
 
+// getBeat retrieves a beat from the given measure at the specified start time.
+// If the beat already exists in the measure, it returns a pointer to the existing beat.
+// If the beat does not exist, it creates a new beat, adds it to the measure, and returns a pointer to the new beat.
+//
+// Parameters:
+// - measure: A pointer to the measure where the beat is located.
+// - start: The start time of the beat.
+//
+// Return:
+// - A pointer to the beat in the measure.
 func (p *Parser) getBeat(measure *Measure, start int32) *Beat {
 	for i := range measure.Beats {
 		if measure.Beats[i].Start == start {
@@ -548,11 +712,14 @@ func (p *Parser) getBeat(measure *Measure, start int32) *Beat {
 	return &measure.Beats[len(measure.Beats)-1]
 }
 
+// readMixChange reads the mix change data from the MIDI file.
+// It updates the tempo value and skips the unnecessary data.
 func (p *Parser) readMixChange(tempo *Tempo) {
-	p.readByte() // instrument
-
+	// Read the instrument byte and skip the next 16 bytes
+	p.readByte()
 	p.skip(16)
 
+	// Read the volume, pan, chorus, reverb, phaser, and tremolo bytes
 	volume, err := p.readByte()
 	if err != nil {
 		fmt.Println("Error reading mix change volume:", err)
@@ -589,8 +756,10 @@ func (p *Parser) readMixChange(tempo *Tempo) {
 		return
 	}
 
-	p.readStringByteSizeOfInteger() // tempoName
+	// Read the tempo name as a byte-sized string and skip it
+	p.readStringByteSizeOfInteger()
 
+	// Read the tempo value as an integer and update the tempo
 	tempoValue, err := p.readInt()
 	if err != nil {
 		fmt.Println("Error reading mix change tempo value:", err)
@@ -615,21 +784,27 @@ func (p *Parser) readMixChange(tempo *Tempo) {
 	if tremolo >= 0 {
 		p.readByte()
 	}
+
 	if tempoValue >= 0 {
 		tempo.Value = tempoValue
 		p.skip(1)
-		if p.versionIndex > 0 {
+		if p.VersionIndex > 0 {
 			p.skip(1)
 		}
 	}
+
+	// Read the last byte and skip the next byte
 	p.readByte()
 	p.skip(1)
-	if p.versionIndex > 0 {
+
+	// If the version index is greater than 0, read and skip the last two byte-sized strings
+	if p.VersionIndex > 0 {
 		p.readStringByteSizeOfInteger()
 		p.readStringByteSizeOfInteger()
 	}
 }
 
+// readBeatEffects reads the beat effects flags and applies them to the given beat and noteEffect.
 func (p *Parser) readBeatEffects(beat *Beat, noteEffect *NoteEffect) {
 	flags1, err := p.readUnsignedByte()
 	if err != nil {
@@ -649,7 +824,7 @@ func (p *Parser) readBeatEffects(beat *Beat, noteEffect *NoteEffect) {
 	if (flags1 & 0x20) != 0 {
 		effect, err := p.readUnsignedByte()
 		if err != nil {
-			fmt.Println("Error reading beat effects effectl:", err)
+			fmt.Println("Error reading beat effects effect:", err)
 			return
 		}
 		noteEffect.Tapping = effect == 1
@@ -674,7 +849,7 @@ func (p *Parser) readBeatEffects(beat *Beat, noteEffect *NoteEffect) {
 			return
 		}
 
-		// TODO: Implementieren Sie die richtige Logik hier
+		// TODO: Implement the correct logic here
 		if strokeUp > 0 {
 			beat.Stroke.Direction = "stroke_up"
 			beat.Stroke.Value = "stroke_down"
@@ -689,6 +864,9 @@ func (p *Parser) readBeatEffects(beat *Beat, noteEffect *NoteEffect) {
 	}
 }
 
+// readTremoloBar reads tremolo bar data from the MIDI file and populates the NoteEffect struct.
+// It skips 5 bytes, reads the number of tremolo bar points, and then iterates over each point to populate
+// the TremoloBar and TremoloPoint structs.
 func (p *Parser) readTremoloBar(effect *NoteEffect) {
 	p.skip(5)
 
@@ -728,6 +906,14 @@ func (p *Parser) readTremoloBar(effect *NoteEffect) {
 		effect.TremoloBar = tremoloBar
 	}
 }
+
+// readText reads text from the MIDI file and populates the Text struct in the Beat struct.
+//
+// Parameters:
+// beat: A pointer to the Beat struct where the text will be stored.
+//
+// Returns:
+// This function does not return any value.
 func (p *Parser) readText(beat *Beat) {
 	text, err := p.readStringByteSizeOfInteger()
 	if err != nil {
@@ -737,6 +923,13 @@ func (p *Parser) readText(beat *Beat) {
 	beat.Text.Value = text
 }
 
+// readChord reads chord information from the MIDI file and populates the Chord struct in the Beat struct.
+//
+// Parameters:
+// strings: An array of GuitarString representing the strings on which the chord is played.
+// beat: A pointer to the Beat struct where the chord information will be stored.
+//
+// This function does not return any value.
 func (p *Parser) readChord(strings []GuitarString, beat *Beat) {
 	chord := Chord{
 		Strings: &strings,
@@ -780,6 +973,15 @@ func (p *Parser) readChord(strings []GuitarString, beat *Beat) {
 	}
 }
 
+// getTime calculates the time duration of a given musical duration.
+//
+// Parameters:
+// duration: A Duration struct representing the musical duration.
+//
+// Return:
+// The function returns a float64 representing the time duration of the given musical duration.
+// The time duration is calculated based on the duration's value, dotted and double-dotted status,
+// and the division of the duration.
 func (p *Parser) getTime(duration Duration) float64 {
 	time := QUARTER_TIME * 4.0 / float64(duration.Value)
 	if duration.Dotted {
@@ -791,6 +993,16 @@ func (p *Parser) getTime(duration Duration) float64 {
 	return time * float64(duration.Division.Times) / float64(duration.Division.Enters)
 }
 
+// readDuration reads the duration of a note based on the given flags.
+// It calculates the duration value, checks for dotted notes, and handles
+// different types of note divisions.
+//
+// Parameters:
+// - flags: A uint8 value representing the flags of the duration.
+//
+// Returns:
+//   - float64: The calculated duration value. If an error occurs during reading,
+//     it returns 0.0.
 func (p *Parser) readDuration(flags uint8) float64 {
 	duration := Duration{}
 	b, err := p.readByte()
@@ -845,6 +1057,19 @@ func (p *Parser) readDuration(flags uint8) float64 {
 	return p.getTime(duration)
 }
 
+// readBeat reads a beat from the MIDI file and returns its duration.
+// It also populates the beat with notes, chords, text, beat effects, and mix changes.
+//
+// Parameters:
+// - start: The start position of the beat in the measure.
+// - measure: The measure to which the beat belongs.
+// - track: The track from which the beat is being read.
+// - tempo: The tempo information for the track.
+// - voiceIndex: The index of the voice within the beat.
+//
+// Return:
+//   - float64: The duration of the beat. If the beat is empty (i.e., no notes are present),
+//     the function returns 0.0.
 func (p *Parser) readBeat(start int32, measure *Measure, track *Track, tempo *Tempo, voiceIndex int) float64 {
 	flags, err := p.readUnsignedByte()
 	if err != nil {
@@ -914,6 +1139,12 @@ func (p *Parser) readBeat(start int32, measure *Measure, track *Track, tempo *Te
 	return 0.0
 }
 
+// readNote reads and processes a note from the MIDI file.
+// It extracts relevant information such as string number, note effects, velocity, fret value, and tied note status.
+// If the note is tied, it retrieves the fret value from the previous note on the same string.
+// If the note is not tied, it sets the fret value to the value read from the MIDI file.
+// If the fret value is invalid, it sets it to 0.
+// The function also skips over any additional data related to the note.
 func (p *Parser) readNote(guitarString GuitarString, track *Track, effect NoteEffect) Note {
 	flags, err := p.readUnsignedByte()
 	if err != nil {
@@ -943,7 +1174,7 @@ func (p *Parser) readNote(guitarString GuitarString, track *Track, effect NoteEf
 	if (flags & 0x10) != 0 {
 		velocity, err := p.readByte()
 		if err != nil {
-			fmt.Println("Error reading veloicity:", err)
+			fmt.Println("Error reading velocity:", err)
 			return Note{}
 		}
 
@@ -982,6 +1213,9 @@ func (p *Parser) readNote(guitarString GuitarString, track *Track, effect NoteEf
 	return note
 }
 
+// getTiedNoteValue retrieves the fret value of the last tied note on the same string in the previous measures.
+// It iterates through the measures and beats in reverse order, looking for the last tied note on the specified guitar string.
+// If a tied note is found, its fret value is returned. If no tied note is found, 0 is returned.
 func (p *Parser) getTiedNoteValue(guitarString int32, track *Track) uint8 {
 	measureCount := len(track.Measures)
 	if measureCount > 0 {
@@ -992,9 +1226,9 @@ func (p *Parser) getTiedNoteValue(guitarString int32, track *Track) uint8 {
 				for v := 0; v < len(beat.Voices); v++ {
 					voice := beat.Voices[v]
 					if !voice.Empty {
-						for n := 0; n < len(voice.Notes); n++ {
+						for n := len(voice.Notes) - 1; n >= 0; n-- {
 							note := voice.Notes[n]
-							if note.String == guitarString {
+							if note.String == guitarString && note.TiedNote {
 								return note.Value
 							}
 						}
@@ -1007,6 +1241,14 @@ func (p *Parser) getTiedNoteValue(guitarString int32, track *Track) uint8 {
 	return 0
 }
 
+// readNoteEffects reads and processes note effects from the MIDI file.
+// It extracts relevant information such as bend, grace notes, tremolo picking, slide, artificial harmonics, trills, hammer, let ring, vibrato, palm mute, and staccato.
+//
+// Parameters:
+// - noteEffect: A pointer to a NoteEffect struct where the extracted note effects will be stored.
+//
+// The function reads the note effect flags from the MIDI file and calls the appropriate functions to process each type of note effect.
+// It also sets the corresponding fields in the NoteEffect struct based on the extracted information.
 func (p *Parser) readNoteEffects(noteEffect *NoteEffect) {
 	flags1, err := p.readUnsignedByte()
 	if err != nil {
@@ -1046,13 +1288,16 @@ func (p *Parser) readNoteEffects(noteEffect *NoteEffect) {
 	noteEffect.Staccato = (flags2 & 0x01) != 0
 }
 
+// readBend reads and processes bend information from the MIDI file.
+// It extracts relevant information such as bend points and their positions and values.
+// The function skips over unnecessary data and handles potential errors.
+// If the bend points are successfully extracted, they are stored in a Bend struct and assigned to the NoteEffect.
 func (p *Parser) readBend(effect *NoteEffect) {
-	p.skip(5)
+	p.skip(5) // Skip over unnecessary data
 
 	bend := Bend{}
 
 	numPoints, err := p.readInt()
-
 	if err != nil {
 		fmt.Println("Error reading bend points count:", err)
 		return
@@ -1070,7 +1315,7 @@ func (p *Parser) readBend(effect *NoteEffect) {
 			fmt.Println("Error reading bend point value:", err)
 			return
 		}
-		p.readByte() // Vermutlich für Padding oder ein ungenutztes Feld
+		p.readByte() // Skip over padding or unused field
 
 		point := BendPoint{
 			Position: int32(math.Round(float64(bendPosition) *
@@ -1088,6 +1333,10 @@ func (p *Parser) readBend(effect *NoteEffect) {
 	}
 }
 
+// readGrace reads and processes grace note information from the MIDI file.
+// It extracts relevant information such as fret, dynamic, transition, duration, and flags.
+// The function handles potential errors during the reading process.
+// If the grace note information is successfully extracted, it is stored in a Grace struct and assigned to the NoteEffect.
 func (p *Parser) readGrace(effect *NoteEffect) {
 	fret, err := p.readUnsignedByte()
 	if err != nil {
@@ -1143,6 +1392,14 @@ func (p *Parser) readGrace(effect *NoteEffect) {
 	effect.Grace = grace
 }
 
+// readTremoloPicking reads and processes tremolo picking information from the MIDI file.
+// It extracts relevant information such as the duration of the tremolo picking.
+//
+// Parameters:
+// - effect: A pointer to a NoteEffect struct where the extracted tremolo picking information will be stored.
+//
+// The function reads the tremolo picking value from the MIDI file and sets the corresponding duration value in the TremoloPicking struct.
+// If an error occurs during the reading process, an error message is printed and the function returns without any further action.
 func (p *Parser) readTremoloPicking(effect *NoteEffect) {
 	value, err := p.readUnsignedByte()
 	if err != nil {
@@ -1160,12 +1417,20 @@ func (p *Parser) readTremoloPicking(effect *NoteEffect) {
 	case 3:
 		tp.Duration.Value = "thirty_second"
 	default:
-		return // Kein gültiger Wert, daher keine Aktion
+		return // No valid value, so no action is taken
 	}
 
 	effect.TremoloPicking = tp
 }
 
+// readArtificialHarmonic reads and processes artificial harmonic information from the MIDI file.
+// It extracts relevant information such as the type of artificial harmonic.
+//
+// Parameters:
+// - effect: A pointer to a NoteEffect struct where the extracted artificial harmonic information will be stored.
+//
+// The function reads the artificial harmonic type value from the MIDI file and sets the corresponding type value in the Harmonic struct.
+// If an error occurs during the reading process, an error message is printed and the function returns without any further action.
 func (p *Parser) readArtificialHarmonic(effect *NoteEffect) {
 	typeVal, err := p.readByte()
 	if err != nil {
@@ -1195,6 +1460,15 @@ func (p *Parser) readArtificialHarmonic(effect *NoteEffect) {
 	effect.Harmonic = harmonic
 }
 
+// readTrill reads and processes trill information from the MIDI file.
+//
+// Parameters:
+// - effect: A pointer to a NoteEffect struct where the extracted trill information will be stored.
+//
+// The function reads the trill fret and period values from the MIDI file.
+// If an error occurs during the reading process, an error message is printed and the function returns without any further action.
+// The trill information is then stored in a Trill struct and assigned to the NoteEffect.
+// If the period value is not recognized, no changes are made to the trill information.
 func (p *Parser) readTrill(effect *NoteEffect) {
 	fret, err := p.readByte()
 	if err != nil {
@@ -1226,8 +1500,16 @@ func (p *Parser) readTrill(effect *NoteEffect) {
 	effect.Trill = trill
 }
 
+// isPercussionChannel checks if the given MIDI channel ID corresponds to a percussion channel.
+//
+// Parameters:
+// - channelId: The MIDI channel ID to be checked.
+//
+// Return:
+//   - bool: A boolean value indicating whether the given channel ID corresponds to a percussion channel.
+//     Returns true if the channel ID is found in the list of percussion channels, otherwise returns false.
 func (p *Parser) isPercussionChannel(channelId int32) bool {
-	for _, channel := range p.channels {
+	for _, channel := range p.Channels {
 		if channel.ID == channelId {
 			return channel.IsPercussionChannel
 		}
@@ -1235,6 +1517,10 @@ func (p *Parser) isPercussionChannel(channelId int32) bool {
 	return false
 }
 
+// getClef retrieves the clef type for the given track based on the guitar strings' values.
+// If the track is not a percussion channel, it iterates through the guitar strings and checks their values.
+// If any guitar string has a value less than or equal to 34, it returns "CLEF_BASS".
+// Otherwise, it returns "CLEF_TREBLE".
 func (p *Parser) getClef(track *Track) string {
 	if !p.isPercussionChannel(track.ChannelID) {
 		for _, gstr := range track.GuitarStrings {
@@ -1247,6 +1533,18 @@ func (p *Parser) getClef(track *Track) string {
 	return "CLEF_TREBLE"
 }
 
+// getTabFile returns a copy of the TabFile struct from the Parser.
+// This function is used to retrieve the parsed MIDI data and prepare it for further processing.
+//
+// Parameters:
+//
+//	p: A pointer to the Parser struct containing the parsed MIDI data.
+//
+// Return:
+//
+//	TabFile: A copy of the TabFile struct containing the parsed MIDI data.
+//	  The returned TabFile struct contains various fields such as title, artist, album, tempo value,
+//	  global key signature, channels, measures, track count, measure headers, and tracks.
 func (p *Parser) getTabFile() TabFile {
 	return TabFile{
 		Major:              p.TabFile.Major,
@@ -1272,6 +1570,13 @@ func (p *Parser) getTabFile() TabFile {
 	}
 }
 
+// numOfDigits calculates the number of digits in a given integer.
+//
+// Parameters:
+// - num: The integer for which the number of digits needs to be calculated.
+//
+// Return:
+// - int: The number of digits in the given integer.
 func numOfDigits(num int32) int {
 	digits := 0
 	for order := 1; int(num)/int(order) != 0; order *= 10 {
@@ -1280,9 +1585,35 @@ func numOfDigits(num int32) int {
 	return digits
 }
 
+// denominatorToDuration converts a given denominator to a Duration struct.
+//
+// Parameters:
+// - denominator: A Denominator struct containing the value and division of the denominator.
+//
+// Return:
+//   - Duration: A Duration struct containing the value and division of the denominator.
+//     The returned Duration struct has the same value and division as the input Denominator.
 func (p *Parser) denominatorToDuration(denominator Denominator) Duration {
 	return Duration{
 		Value:    denominator.Value,
 		Division: denominator.Division,
 	}
+}
+
+// IsSupportedVersion checks if the given MIDI file version is supported by the parser.
+//
+// Parameters:
+// - version: A string representing the MIDI file version to be checked.
+//
+// Return:
+//   - bool: A boolean value indicating whether the given version is supported.
+//     Returns true if the version is found in the list of supported versions, otherwise returns false.
+func (p *Parser) IsSupportedVersion(version string) bool {
+	for i, v := range VERSIONS {
+		if strings.Compare(version, v) == 0 {
+			p.VersionIndex = i
+			return true
+		}
+	}
+	return false
 }
